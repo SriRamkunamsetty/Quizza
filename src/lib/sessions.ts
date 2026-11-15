@@ -31,7 +31,13 @@ import { seededShuffle } from "@/lib/shuffle";
 import { signViewToken, verifyViewToken } from "@/lib/view-token";
 import { isClean } from "@/lib/moderation";
 import { csvField } from "@/lib/csv";
-import { applyPowerup, enabledPowerups, powerupUses } from "@/lib/powerups";
+import {
+  applyPowerup,
+  enabledPowerups,
+  powerupUses,
+  powerupsLeft,
+  selectFiftyFiftyOptionIds,
+} from "@/lib/powerups";
 import { matchingTeamName, normalizeTeamNames, normalizeTeamRoster, rosterTeamForEmail } from "@/lib/teams";
 import { getCurrentUser, oidcEnabled } from "@/lib/auth";
 import type { z } from "zod";
@@ -1017,6 +1023,55 @@ export async function submitAnswer(
     pointsAwarded: reveal ? points : null,
     correctOptionId: reveal ? correctOptionId : null,
   };
+}
+
+/** Computes which two wrong options to eliminate for a 50:50 powerup. */
+export async function getFiftyFiftyElimination(
+  code: string,
+  questionId: string,
+  clientToken: string,
+) {
+  const s = await requireSession(code);
+  const p = await getParticipant(s.id, clientToken);
+  if (!p) {
+    throw new HttpError(401, "unauthorized", "Join this room first");
+  }
+
+  const settings = await sessionSettings(s);
+  if (!settings.powerups) {
+    throw new HttpError(
+      409,
+      "powerups_disabled",
+      "Powerups are not enabled for this quiz",
+    );
+  }
+
+  const used = await db
+    .select({ powerup: answers.powerup })
+    .from(answers)
+    .where(
+      and(
+        eq(answers.sessionId, s.id),
+        eq(answers.participantId, p.id),
+        isNotNull(answers.powerup),
+      ),
+    );
+
+  const left = powerupsLeft(powerupUses(settings), used.map((u) => u.powerup!));
+  if (left <= 0) {
+    throw new HttpError(409, "powerup_used", "No powerup uses remaining");
+  }
+
+  const qOpts = await db
+    .select({ id: options.id, isCorrect: options.isCorrect })
+    .from(options)
+    .where(eq(options.questionId, questionId));
+
+  const eliminatedOptionIds = selectFiftyFiftyOptionIds(
+    qOpts,
+    `${p.id}:${questionId}`,
+  );
+  return { eliminatedOptionIds };
 }
 
 /* ---------------------------- results ------------------------------- */

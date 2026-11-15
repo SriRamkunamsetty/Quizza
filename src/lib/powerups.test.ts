@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { applyPowerup, enabledPowerups, planAttackSettlements, powerupsLeft, type AttackAnswer } from "./powerups";
+import {
+  applyPowerup,
+  enabledPowerups,
+  planAttackSettlements,
+  powerupsLeft,
+  selectFiftyFiftyOptionIds,
+  type AttackAnswer,
+} from "./powerups";
 
 describe("powerup scoring", () => {
   it("doubles earned points without awarding points for a wrong answer", () => {
@@ -10,9 +17,14 @@ describe("powerup scoring", () => {
     expect(applyPowerup(0, 1000, false, "safety_net")).toBe(333);
     expect(applyPowerup(800, 1000, true, "safety_net")).toBe(800);
     expect(applyPowerup(0, 1000, false, "shield")).toBe(0);
+    expect(applyPowerup(500, 1000, true, "fifty_fifty")).toBe(500);
   });
-  it("excludes live-only powers from scheduled play", () => {
-    expect(enabledPowerups({ powerups: true }, "scheduled")).toEqual(["double", "safety_net"]);
+  it("excludes live-only powers from scheduled play while keeping 50:50", () => {
+    expect(enabledPowerups({ powerups: true }, "scheduled")).toEqual([
+      "double",
+      "safety_net",
+      "fifty_fifty",
+    ]);
   });
   it("uses one shared charge pool across all powers", () => {
     expect(powerupsLeft(2, ["shield"])).toBe(1);
@@ -47,5 +59,35 @@ describe("powerup scoring", () => {
     expect(result.outcomes[0].stolen).toBe(20);
     expect(result.scores.get("victim")).toBe(0);
     expect(result.scores.get("attacker")).toBe(120);
+  });
+
+  describe("selectFiftyFiftyOptionIds", () => {
+    const fourOptions = [
+      { id: "opt-1", isCorrect: false },
+      { id: "opt-2", isCorrect: true },
+      { id: "opt-3", isCorrect: false },
+      { id: "opt-4", isCorrect: false },
+    ];
+
+    it("eliminates exactly two incorrect options", () => {
+      const eliminated = selectFiftyFiftyOptionIds(fourOptions, "player-1");
+      expect(eliminated).toHaveLength(2);
+      expect(eliminated).not.toContain("opt-2"); // Never eliminates the correct answer
+      expect(eliminated.every((id) => ["opt-1", "opt-3", "opt-4"].includes(id))).toBe(true);
+    });
+
+    it("is deterministic for identical seedKey", () => {
+      const run1 = selectFiftyFiftyOptionIds(fourOptions, "player-test-seed");
+      const run2 = selectFiftyFiftyOptionIds(fourOptions, "player-test-seed");
+      expect(run1).toEqual(run2);
+    });
+
+    it("returns empty array for questions with <= 2 options", () => {
+      const twoOptions = [
+        { id: "t", isCorrect: true },
+        { id: "f", isCorrect: false },
+      ];
+      expect(selectFiftyFiftyOptionIds(twoOptions, "player-1")).toEqual([]);
+    });
   });
 });
