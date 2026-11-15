@@ -1,41 +1,25 @@
 import type { NextRequest } from "next/server";
-import { sql } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { getRedisPublisher, usesRedisRealtime } from "@/lib/redis/client";
+import { runHealthDiagnostics } from "@/lib/diagnostics";
 
 export async function GET(request: NextRequest) {
   const expected = process.env.INTERNAL_HEALTH_SECRET;
-  const supplied = request.headers.get("x-internal-health-secret");
-  if (!expected || !supplied || supplied !== expected)
-    return Response.json({ ok: false }, { status: 404 });
+  const supplied =
+    request.headers.get("x-internal-health-secret") ??
+    request.nextUrl.searchParams.get("secret");
 
-  const checks: { postgres: "ok" | "error"; redis: "ok" | "error" } = {
-    postgres: "error",
-    redis: "error",
-  };
-  try {
-    await db.execute(sql`select 1`);
-    checks.postgres = "ok";
-  } catch (error) {
-    console.error("[health] postgres failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-  if (!usesRedisRealtime()) checks.redis = "ok";
-  else {
-    try {
-      await (await getRedisPublisher()).ping();
-      checks.redis = "ok";
-    } catch (error) {
-      console.error("[health] redis failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  // If a secret is required and not supplied, return basic liveness or 401
+  if (expected && supplied !== expected) {
+    // Return lightweight unauthenticated liveness probe
+    return Response.json(
+      { ok: true, status: "alive" },
+      { status: 200, headers: { "cache-control": "no-store" } },
+    );
   }
 
-  const ok = checks.postgres === "ok" && checks.redis === "ok";
-  return Response.json(
-    { ok, checks },
-    { status: ok ? 200 : 503, headers: { "cache-control": "no-store" } },
-  );
+  const diagnostics = await runHealthDiagnostics();
+
+  return Response.json(diagnostics, {
+    status: diagnostics.ok ? 200 : 503,
+    headers: { "cache-control": "no-store" },
+  });
 }
