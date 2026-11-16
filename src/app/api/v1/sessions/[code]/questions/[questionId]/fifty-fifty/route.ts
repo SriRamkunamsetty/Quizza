@@ -4,7 +4,7 @@ import { getFiftyFiftyElimination } from "@/lib/sessions";
 
 type Ctx = { params: Promise<{ code: string; questionId: string }> };
 
-export const GET = handle<Ctx>(async (req: NextRequest, { params }) => {
+async function handleFiftyFifty(req: NextRequest, { params }: Ctx) {
   const clientToken = req.headers.get("x-client-token");
   if (!clientToken) {
     throw new HttpError(401, "missing_token", "Client token required");
@@ -12,4 +12,7 @@ export const GET = handle<Ctx>(async (req: NextRequest, { params }) => {
   const { code, questionId } = await params;
   const result = await getFiftyFiftyElimination(code, questionId, clientToken);
   return json(result);
-});
+}
+
+export const GET = handle<Ctx>(handleFiftyFifty);
+export const POST = handle<Ctx>(handleFiftyFifty);
