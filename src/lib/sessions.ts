@@ -22,6 +22,7 @@ import { generateJoinCode, generateToken } from "@/lib/codes";
 import { QUESTION_TYPES, OPTION_COLORS } from "@/lib/quiz-constants";
 import { clampResponseMs, computePoints } from "@/lib/scoring";
 import {
+  canDiscloseScorecardAnswer,
   canRevealAnswers,
   canShowLeaderboard,
   participationMode,
@@ -1241,7 +1242,7 @@ export async function getParticipantReview(
 
   const over = isSessionOver(s);
   const settings = await sessionSettings(s);
-  const showAnswers = isHost || canRevealAnswers(settings, over);
+  const policy = revealPolicy(settings);
 
   // Compute rank among all participants
   const allParts = await db
@@ -1276,18 +1277,35 @@ export async function getParticipantReview(
   let responseCount = 0;
 
   const qs = quiz?.questions ?? [];
+  const currentLiveIdx = s.mode === "live" && s.currentQuestionId
+    ? qs.findIndex((item) => item.id === s.currentQuestionId)
+    : -1;
+
   const breakdown = qs.map((q, index) => {
     const a = answerByQuestion.get(q.id);
     const answered = Boolean(a);
     if (a?.powerup) {
       powerupsUsed.push(a.powerup);
     }
-    if (a?.isCorrect) {
-      correctCount++;
-    }
     if (a?.responseMs != null) {
       totalResponseMs += a.responseMs;
       responseCount++;
+    }
+
+    // Determine whether this specific question's answer can be disclosed
+    const canDisclose = canDiscloseScorecardAnswer({
+      isHost,
+      isOver: over,
+      policy,
+      mode: s.mode as "live" | "scheduled",
+      currentQuestionIndex: currentLiveIdx,
+      questionIndex: index,
+      isRevealed: Boolean(s.revealed),
+      answered,
+    });
+
+    if (canDisclose && a?.isCorrect) {
+      correctCount++;
     }
 
     const correctOpt = q.options.find((o) => o.isCorrect);
@@ -1306,9 +1324,9 @@ export async function getParticipantReview(
       answered,
       userAnswer: userAnswerText,
       selectedOptionId: a?.optionId ?? null,
-      isCorrect: showAnswers ? (a ? a.isCorrect : false) : null,
-      correctAnswer: showAnswers ? (correctOpt?.label ?? null) : null,
-      pointsAwarded: showAnswers ? (a ? a.points : 0) : null,
+      isCorrect: canDisclose ? (a ? a.isCorrect : false) : null,
+      correctAnswer: canDisclose ? (correctOpt?.label ?? null) : null,
+      pointsAwarded: canDisclose ? (a ? a.points : 0) : null,
       responseMs: a?.responseMs ?? null,
       powerup: a?.powerup ?? null,
       attackStolen: a?.attackStolen ?? 0,

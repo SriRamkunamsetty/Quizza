@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import test, { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { canDiscloseScorecardAnswer } from "./quiz-policy.ts";
 
 describe("Participant Review & Drilldown", () => {
   it("calculates accuracy percentage and avg speed accurately", () => {
@@ -32,15 +34,15 @@ describe("Participant Review & Drilldown", () => {
       { isCorrect: true, responseMs: 2000 },
     ]);
 
-    expect(stats1.totalAnswered).toBe(3);
-    expect(stats1.correctCount).toBe(2);
-    expect(stats1.accuracyPct).toBe(67);
-    expect(stats1.avgResponseMs).toBe(2200);
+    assert.equal(stats1.totalAnswered, 3);
+    assert.equal(stats1.correctCount, 2);
+    assert.equal(stats1.accuracyPct, 67);
+    assert.equal(stats1.avgResponseMs, 2200);
 
     const statsEmpty = calculateStats([]);
-    expect(statsEmpty.totalAnswered).toBe(0);
-    expect(statsEmpty.accuracyPct).toBe(0);
-    expect(statsEmpty.avgResponseMs).toBe(0);
+    assert.equal(statsEmpty.totalAnswered, 0);
+    assert.equal(statsEmpty.accuracyPct, 0);
+    assert.equal(statsEmpty.avgResponseMs, 0);
   });
 
   it("enforces scorecard authorization policy", () => {
@@ -61,24 +63,25 @@ describe("Participant Review & Drilldown", () => {
     const participant = { clientToken: "player-token-abc" };
 
     // Host authorized
-    expect(authorizeReview(session, participant, { hostToken: "host-secret-key" })).toEqual({
+    assert.deepEqual(authorizeReview(session, participant, { hostToken: "host-secret-key" }), {
       isHost: true,
       isSelf: false,
     });
 
     // Participant authorized
-    expect(authorizeReview(session, participant, { clientToken: "player-token-abc" })).toEqual({
+    assert.deepEqual(authorizeReview(session, participant, { clientToken: "player-token-abc" }), {
       isHost: false,
       isSelf: true,
     });
 
     // Another player forbidden
-    expect(() =>
-      authorizeReview(session, participant, { clientToken: "other-player" }),
-    ).toThrow("403: forbidden");
+    assert.throws(
+      () => authorizeReview(session, participant, { clientToken: "other-player" }),
+      /403: forbidden/,
+    );
 
     // Anonymous forbidden
-    expect(() => authorizeReview(session, participant, {})).toThrow("403: forbidden");
+    assert.throws(() => authorizeReview(session, participant, {}), /403: forbidden/);
   });
 
   it("masks unrevealed answers for participants while showing to host", () => {
@@ -96,14 +99,14 @@ describe("Participant Review & Drilldown", () => {
     const data = { isCorrect: true, correctAnswer: "Option A", points: 100 };
 
     // Host or revealed session sees answer
-    expect(maskAnswer(true, data)).toEqual({
+    assert.deepEqual(maskAnswer(true, data), {
       isCorrect: true,
       correctAnswer: "Option A",
       pointsAwarded: 100,
     });
 
     // Unrevealed participant view hides correctness and answer
-    expect(maskAnswer(false, data)).toEqual({
+    assert.deepEqual(maskAnswer(false, data), {
       isCorrect: null,
       correctAnswer: null,
       pointsAwarded: null,
@@ -135,6 +138,127 @@ describe("Participant Review & Drilldown", () => {
       powerup: "double",
     });
 
-    expect(row).toBe("Alice,500,Paris,yes,double");
+    assert.equal(row, "Alice,500,Paris,yes,double");
+  });
+
+  describe("canDiscloseScorecardAnswer anti-leak verification", () => {
+    it("always grants disclosure to host regardless of session progress", () => {
+      const allowed = canDiscloseScorecardAnswer({
+        isHost: true,
+        isOver: false,
+        policy: "never",
+        mode: "live",
+        currentQuestionIndex: 0,
+        questionIndex: 5,
+        isRevealed: false,
+        answered: false,
+      });
+      assert.equal(allowed, true);
+    });
+
+    it("withholds answers for concluded session when policy is 'never'", () => {
+      const allowed = canDiscloseScorecardAnswer({
+        isHost: false,
+        isOver: true,
+        policy: "never",
+        mode: "live",
+        currentQuestionIndex: -1,
+        questionIndex: 0,
+        isRevealed: true,
+        answered: true,
+      });
+      assert.equal(allowed, false);
+    });
+
+    it("discloses answers for concluded session when policy is 'at_end' or 'per_question'", () => {
+      assert.equal(
+        canDiscloseScorecardAnswer({
+          isHost: false,
+          isOver: true,
+          policy: "at_end",
+          mode: "live",
+          currentQuestionIndex: -1,
+          questionIndex: 0,
+          isRevealed: true,
+          answered: true,
+        }),
+        true,
+      );
+
+      assert.equal(
+        canDiscloseScorecardAnswer({
+          isHost: false,
+          isOver: true,
+          policy: "per_question",
+          mode: "scheduled",
+          currentQuestionIndex: -1,
+          questionIndex: 0,
+          isRevealed: true,
+          answered: true,
+        }),
+        true,
+      );
+    });
+
+    it("in live active session: discloses past questions, masks unrevealed current question, and strictly masks future questions", () => {
+      // Current active question is index 2
+      const baseCtx = {
+        isHost: false,
+        isOver: false,
+        policy: "per_question" as const,
+        mode: "live" as const,
+        currentQuestionIndex: 2,
+        isRevealed: false,
+        answered: true,
+      };
+
+      // Past question (index 0, 1): already played and resolved
+      assert.equal(canDiscloseScorecardAnswer({ ...baseCtx, questionIndex: 0 }), true);
+      assert.equal(canDiscloseScorecardAnswer({ ...baseCtx, questionIndex: 1 }), true);
+
+      // Current live question (index 2) while unrevealed: MUST NOT disclose
+      assert.equal(
+        canDiscloseScorecardAnswer({ ...baseCtx, questionIndex: 2, isRevealed: false }),
+        false,
+      );
+
+      // Current live question (index 2) once host reveals: discloses
+      assert.equal(
+        canDiscloseScorecardAnswer({ ...baseCtx, questionIndex: 2, isRevealed: true }),
+        true,
+      );
+
+      // Future questions (index 3, 4, 5): MUST NEVER disclose under any circumstance
+      assert.equal(canDiscloseScorecardAnswer({ ...baseCtx, questionIndex: 3 }), false);
+      assert.equal(
+        canDiscloseScorecardAnswer({ ...baseCtx, questionIndex: 3, isRevealed: true }),
+        false,
+      );
+      assert.equal(canDiscloseScorecardAnswer({ ...baseCtx, questionIndex: 4 }), false);
+    });
+
+    it("in scheduled active session: discloses only after participant has answered", () => {
+      const scheduledCtx = {
+        isHost: false,
+        isOver: false,
+        policy: "per_question" as const,
+        mode: "scheduled" as const,
+        currentQuestionIndex: -1,
+        questionIndex: 1,
+        isRevealed: false,
+      };
+
+      // Unanswered question in scheduled mode
+      assert.equal(
+        canDiscloseScorecardAnswer({ ...scheduledCtx, answered: false }),
+        false,
+      );
+
+      // Answered question in scheduled mode
+      assert.equal(
+        canDiscloseScorecardAnswer({ ...scheduledCtx, answered: true }),
+        true,
+      );
+    });
   });
 });
