@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatBytesToMb, toMemoryMetric, measureProbe } from "./diagnostics-metrics.ts";
+import {
+  formatBytesToMb,
+  toMemoryMetric,
+  measureProbe,
+  evaluateHealthAuth,
+} from "./diagnostics-metrics.ts";
 import { presenceKey, answerCounterKey, stateChannel } from "./realtime/channels.ts";
 
 describe("Diagnostics and Performance Probes", () => {
@@ -59,5 +64,40 @@ describe("Diagnostics and Performance Probes", () => {
       () => answerCounterKey("12345678-1234-4123-8123-123456789abc", "malicious-key"),
       /Invalid realtime question id/,
     );
+  });
+
+  describe("evaluateHealthAuth security policy", () => {
+    it("returns liveness (200) for unauthenticated probe when secret is unset", () => {
+      const result = evaluateHealthAuth(undefined, null);
+      assert.deepEqual(result, { kind: "liveness", status: 200 });
+    });
+
+    it("returns liveness (200) for unauthenticated probe when secret is configured", () => {
+      const result = evaluateHealthAuth("super-secret-token", null);
+      assert.deepEqual(result, { kind: "liveness", status: 200 });
+    });
+
+    it("fails closed (503) when header is supplied but secret is unconfigured", () => {
+      const result = evaluateHealthAuth(undefined, "attempted-header-secret");
+      assert.equal(result.kind, "disabled");
+      assert.equal(result.status, 503);
+    });
+
+    it("fails closed (503) when secret is empty string or whitespace", () => {
+      const result = evaluateHealthAuth("   ", "attempted-header-secret");
+      assert.equal(result.kind, "disabled");
+      assert.equal(result.status, 503);
+    });
+
+    it("returns unauthorized (401) when header does not match expected secret", () => {
+      const result = evaluateHealthAuth("super-secret-token", "wrong-secret");
+      assert.equal(result.kind, "unauthorized");
+      assert.equal(result.status, 401);
+    });
+
+    it("grants full diagnostics access (200) when header matches expected secret", () => {
+      const result = evaluateHealthAuth("super-secret-token", "super-secret-token");
+      assert.deepEqual(result, { kind: "diagnostics", status: 200 });
+    });
   });
 });

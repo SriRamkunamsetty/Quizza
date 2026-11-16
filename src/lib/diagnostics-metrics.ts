@@ -32,6 +32,53 @@ export type HealthDiagnostics = {
   };
 };
 
+export type HealthAuthResult =
+  | { kind: "liveness"; status: 200 }
+  | { kind: "diagnostics"; status: 200 }
+  | { kind: "unauthorized"; status: 401; error: string }
+  | { kind: "disabled"; status: 503; error: string };
+
+/**
+ * Evaluates authorization for the internal health check endpoint.
+ *
+ * Anti-leak & security rules:
+ * - Accept secret through headers ONLY (`x-internal-health-secret`).
+ * - Query parameters like `?secret=` are strictly ignored to prevent URL leaks in access logs.
+ * - Fail-closed: If `INTERNAL_HEALTH_SECRET` is absent/empty, diagnostics are disabled.
+ * - Keep unauthenticated liveness and authenticated diagnostics strictly separate.
+ */
+export function evaluateHealthAuth(
+  expectedSecret: string | undefined | null,
+  headerSecret: string | undefined | null,
+): HealthAuthResult {
+  const hasExpected = Boolean(expectedSecret && expectedSecret.trim().length > 0);
+  const supplied = headerSecret?.trim();
+
+  // If no header supplied, return lightweight unauthenticated liveness probe
+  if (!supplied) {
+    return { kind: "liveness", status: 200 };
+  }
+
+  // Caller supplied a header requesting deep diagnostics:
+  if (!hasExpected) {
+    return {
+      kind: "disabled",
+      status: 503,
+      error: "Health diagnostics disabled: internal secret is unconfigured",
+    };
+  }
+
+  if (supplied !== expectedSecret) {
+    return {
+      kind: "unauthorized",
+      status: 401,
+      error: "Unauthorized: invalid internal health secret",
+    };
+  }
+
+  return { kind: "diagnostics", status: 200 };
+}
+
 /** Formats bytes to megabytes rounded to two decimal places. */
 export function formatBytesToMb(bytes: number): number {
   return Math.round((bytes / (1024 * 1024)) * 100) / 100;
